@@ -25,7 +25,7 @@ namespace MyChatRoomClient
         Thread threadClient = null; //客户端 负责 接收 服务端发来的数据消息的线程
         Socket socketClient = null;//客户端套接字
 
-		//客户端发送连接请求到服务器
+	//客户端发送连接请求到服务器
         private void btnConnect_Click(object sender, EventArgs e)
         {
             IPAddress address = IPAddress.Parse(txtIP.Text.Trim());//获得IP
@@ -41,8 +41,8 @@ namespace MyChatRoomClient
         }
 
         /// <summary>
-		/// 监听服务端 发来的消息
-		/// </summary>
+	/// 监听服务端 发来的消息
+	/// </summary>
         void RecMsg()
         {
             while (true)
