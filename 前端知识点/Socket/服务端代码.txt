@@ -1,0 +1,184 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Windows.Forms;
+
+using System.Net;//IPAdress,IPEndPoint(ip和端口)类
+using System.Net.Sockets;
+using System.Threading;
+using System.IO;
+
+namespace MyChatRoomServer
+{
+    public partial class FChatServer : Form
+    {
+        public FChatServer()
+        {
+            InitializeComponent();
+            TextBox.CheckForIllegalCrossThreadCalls = false;//关闭 对 文本框  的跨线程操作检查
+        }
+
+        Thread threadWatch = null;//负责监听 客户端 连接请求的 线程
+        Socket socketWatch = null;//负责监听的 套接字
+
+        private void btnBeginListen_Click(object sender, EventArgs e)
+        {
+            //创建 服务端 负责监听的 套接字，参数（使用IP4寻址协议，使用流式连接，使用TCP协议传输数据）
+            socketWatch = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+           //获得文本框中的 IP地址对象
+            IPAddress address = IPAddress.Parse(txtIP.Text.Trim());
+            //创建 包含 ip 和 port 的网络节点对象
+            IPEndPoint endpoint = new IPEndPoint(address, int.Parse(txtPort.Text.Trim()));
+            //将 负责监听 的套接字 绑定到 唯一的IP和端口上
+            socketWatch.Bind(endpoint);
+            //设置监听队列的长度
+            socketWatch.Listen(10);
+
+            //创建 负责监听的线程，并传入监听方法
+            threadWatch = new Thread(WatchConnecting);
+            threadWatch.IsBackground = true;//设置为后台线程
+            threadWatch.Start();//开启线程
+            ShowMsg("服务器启动监听成功～");
+            //IPEndPoint 
+            //socketWatch.Bind(
+        }
+        //保存了服务器端 所有负责和客户端通信的套接字
+        Dictionary<string, Socket> dict = new Dictionary<string, Socket>();
+        //保存了服务器端 所有负责调用 通信套接字.Receive方法 的线程
+        Dictionary<string, Thread> dictThread = new Dictionary<string, Thread>();
+
+        //Socket sokConnection = null;
+        /// <summary>
+        /// 监听客户端请求的方法
+        /// </summary>
+        void WatchConnecting()
+        {
+            while (true)//持续不断的监听新的客户端的连接请求
+            {
+                //开始监听 客户端 连接请求，注意：Accept方法，会阻断当前的线程！
+                Socket sokConnection = socketWatch.Accept();//一旦监听到客户端的请求，就返回一个负责和该客户端通信的套接字 sokConnection
+                //sokConnection.Receive
+                //向 列表控件中 添加一个 客户端的ip端口字符串，作为客户端的唯一标识
+                lbOnline.Items.Add(sokConnection.RemoteEndPoint.ToString());
+                //将 与客户端通信的 套接字对象 sokConnection 添加到 键值对集合中，并以客户端IP端口作为键
+                dict.Add(sokConnection.RemoteEndPoint.ToString(), sokConnection);
+                
+                //创建 通信线程
+                ParameterizedThreadStart pts = new ParameterizedThreadStart(RecMsg);
+                Thread thr = new Thread(pts);
+                thr.IsBackground = true;//设置为
+                thr.Start(sokConnection);//启动线程 并为线程要调用的方法RecMsg 传入参数sokConnection
+
+                dictThread.Add(sokConnection.RemoteEndPoint.ToString(), thr);//将线程 保存在 字典里，方便大家以后做“踢人”功能的时候用
+
+                ShowMsg("客户端连接成功！" + sokConnection.RemoteEndPoint.ToString());
+                //sokConnection.RemoteEndPoint 中保存的是 当前连接客户端的 Ip和端口
+            }
+        }
+
+        /// <summary>
+        /// 服务端 负责监听 客户端 发送来的数据的 方法
+        /// </summary>
+        void RecMsg(object socketClientPara)
+        {
+            Socket socketClient = socketClientPara as Socket;
+            while (true)
+            {
+                //定义一个 接收用的 缓存区(2M字节数组)
+                byte[] arrMsgRec = new byte[1024 * 1024 * 2];
+                //将接收到的数据 存入 arrMsgRec 数组,并返回 真正接收到的数据 的长度
+                int length=-1;
+                try
+                {
+                    length = socketClient.Receive(arrMsgRec);
+                }
+                catch (SocketException ex)
+                {
+                    ShowMsg("异常：" + ex.Message);
+                    //从 通信套接字 集合中 删除 被中断连接的 通信套接字对象
+                    dict.Remove(socketClient.RemoteEndPoint.ToString());
+                    //从 通信线程    结合中 删除 被终端连接的 通信线程对象
+                    dictThread.Remove(socketClient.RemoteEndPoint.ToString());
+                    //从 列表中 移除 被中断的连接 ip:Port
+                    lbOnline.Items.Remove(socketClient.RemoteEndPoint.ToString());
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    ShowMsg("异常：" + ex.Message);
+                    break;
+                }
+                if (arrMsgRec[0] == 0)//判断 发送过来的数据 的第一个元素是 0，则代表发送来的是 文字数据
+                {
+                    //此时 是将 数组 所有的元素 都转成字符串，而真正接收到的 只有服务端发来的几个字符
+                    string strMsgRec = System.Text.Encoding.UTF8.GetString(arrMsgRec,1, length-1);
+                    ShowMsg(strMsgRec);
+                }
+                else if (arrMsgRec[0] == 1)//如果是1 ，则代表发送过来的是 文件数据(图片/视频/文件....)
+                {
+                    SaveFileDialog sfd = new SaveFileDialog();//保存文件选择框对象
+                    if (sfd.ShowDialog() == System.Windows.Forms.DialogResult.OK)//用户选择文件路径后
+                    {
+                        string fileSavePath = sfd.FileName;//获得要保存的文件路径
+                        //创建文件流，然后 让文件流来 根据路径 创建一个文件
+                        using (FileStream fs = new FileStream(fileSavePath, FileMode.Create))
+                        {
+                            fs.Write(arrMsgRec, 1, length-1);
+                            ShowMsg("文件保存成功：" + fileSavePath);
+                        }
+                    }
+                }
+            }
+        }
+
+        //发送消息到客户端
+        private void btnSend_Click(object sender, EventArgs e)
+        {
+            if (string.IsNullOrEmpty(lbOnline.Text))
+            {
+                MessageBox.Show("请选择要发送的好友");
+            }
+            else
+            {
+                string strMsg = txtMsgSend.Text.Trim();
+                //将要发送的字符串 转成 utf8对应的字节数组
+                byte[] arrMsg = System.Text.Encoding.UTF8.GetBytes(strMsg);
+                //获得列表中 选中的KEY
+                string strClientKey = lbOnline.Text;
+                //通过key，找到 字典集合中对应的 与某个客户端通信的 套接字的 send方法，发送数据给对方
+                try
+                {
+                    dict[strClientKey].Send(arrMsg);
+                    //sokConnection.Send(arrMsg);
+                    ShowMsg("发送了数据出去：" + strMsg);
+                }
+                catch (SocketException ex)
+                {
+                    ShowMsg("发送时异常："+ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    ShowMsg("发送时异常：" + ex.Message);
+                }
+            }
+        }
+
+        //服务端群发消息
+        private void btnSendToAll_Click(object sender, EventArgs e)
+        {
+            string strMsg = txtMsgSend.Text.Trim();
+            //将要发送的字符串 转成 utf8对应的字节数组
+            byte[] arrMsg = System.Text.Encoding.UTF8.GetBytes(strMsg);
+            foreach (Socket s in dict.Values)
+            {
+                s.Send(arrMsg);
+            }
+            ShowMsg("群发完毕！：）");
+        }
+	}
+}
+	
